@@ -1,0 +1,164 @@
+\documentclass[10pt]{article}
+\author{by: Kyle Lemons}
+\title{A Proposal for Generic Types in Go}
+
+\usepackage{color}
+\usepackage{listings}
+\usepackage{upquote}
+\usepackage{caption}
+\usepackage{fontenc}
+\usepackage{courier}
+\usepackage{hyperref}
+
+% Set up cross references and links
+\hypersetup{
+  hyperindex,
+  colorlinks,
+  allcolors=blue,
+  urlcolor=red,
+  filecolor=red,
+  bookmarks,
+  bookmarksopen=true,
+  bookmarksnumbered=false,
+}
+
+% Define the Go language for listings
+\lstdefinelanguage{Go}{
+  sensitive=true,          % Keywords are case sensitive
+  keywords={               % Language keywords
+    break,        default,      func,         interface,    select,
+    case,         defer,        go,           map,          struct,
+    chan,         else,         goto,         package,      switch,
+    const,        fallthrough,  if,           range,        type,
+    continue,     for,          import,       return,       var,
+    generic,
+  },
+  morekeywords=[2]{
+    uint, uint8, uint16, uint32, uint64, byte, uintptr,
+    int, int8,  int16,  int32,  int64,
+    float32, float64, complex64, complex128,
+  },
+  comment=[l]{//},         % Line comments
+  morecomment=[s]{/*}{*/}, % Block comments
+  string=[b]",             % Normal strings, allow [b]ackslash escapes
+  morestring=[b]',         % Character literals, allow [b]ackslash escapes
+  morestring=[s]``,        % Raw strings, don't allow any escapes
+  literate=*{::}{$\cdot$}1,  % Allow :: instead of the cdot
+}
+
+% Define some pretty colors
+\definecolor{keyword}{RGB}{154,61,61} % Dark red
+\definecolor{type}{RGB}{154,119,61}   % {255,128,64} % Dark Orange
+\definecolor{string}{RGB}{45,69,101}  % Dark blue
+\definecolor{comment}{RGB}{49,123,49} % Dark green
+
+% Define a pretty style for code
+\lstset{
+  language=Go,                % Select the language to use
+  % Styles
+  basicstyle=\small\ttfamily,    % Use small monospace text
+  stringstyle=\color{string},    % Strings are blue
+  keywordstyle=\color{keyword},  % Keywords are red
+  keywordstyle=[2]\color{type},  % Types are orange
+  commentstyle=\color{comment},  % Comments are green
+  showspaces=false,              % Don't show spaces as underbrace
+  showstringspaces=false,        % Don't show spaces in strings
+  % Line numbers
+  numbers=left,               % Number lines on the left
+  numberstyle=\tiny,          % Make the line numbers small
+  stepnumber=1,               % Number every line
+  numbersep=5pt,              % Put space between the number and the code
+  % Tabs and alignment
+  tabsize=2,                  % Default tab width
+  showtabs=false,             % Don't show tabs as arrows
+  breaklines=true,            % Add line breaks for long lines
+  breakindent=12px,           % Indent broken lines
+  breakatwhitespace=true,     % Try to break lines at whitespace
+  % Misc
+  extendedchars=true,         % Allow UTF-8 characters
+  % Framing
+  frame=b,                    % Show a bottom frame for listings
+  xleftmargin=17pt,           % Add some extra space for the code
+  framexleftmargin=17pt,      % Widen the frame to accomodate
+  framexrightmargin=6pt,      % Widen the right side too
+  framexbottommargin=3pt,     % Leave some whitespace below the text
+  % Use math escapes
+  mathescape,
+}
+
+% Make the pretty listing blocks
+\DeclareCaptionFont{white}{\color{white}}
+\DeclareCaptionFormat{listing}{\colorbox[cmyk]{0.43, 0.35, 0.35,0.01}{\parbox{\textwidth}{\hspace{15pt}#1#2#3}}}
+\captionsetup[lstlisting]{
+	format=listing,
+	labelfont=white,
+	textfont=white,
+	singlelinecheck=false,
+	margin=0pt,
+	font={bf,footnotesize}
+}
+
+% Commands
+\newcommand{\code}[1]{\texttt{#1}}
+\newcommand{\Listing}[1]{\autoref{lst:#1}}
+
+\begin{document}
+
+\maketitle
+\tableofcontents
+\lstlistoflistings
+\newpage
+\section{Introduction}
+I have been using Go now for over a year.  I think that through this time, I have gotten a pretty good feel for the language as a whole and the principles that guide it.  There have been very few times where I have even been tempted to look for generic types while writing actual programs, but for some things (like the math package), there is clearly no good solution yet within the confines of the language.  The creators of Go have acknowledged that they will consider adding generic types to the language if they find the right way to go about it, so here is my humble attempt at defining what generic types could look like within Go.
+
+\subsection{Philosophy}
+In designing this proposal for generic types, there are a few fundamental principles which have guided my hand.  I have discussed various generic type proposals with other members of the community who have other design goals in mind, so I think it's probably a good idea to state these up front.
+\begin{itemize}
+\item Generic types should be simple.
+\item Generic types should not add any new syntax to the language.
+\item Generic types should not incur much, if any, run-time overhead.
+\item It should be possible to use a generic value as a map key or slice index.
+\item Generic types should not require the programmer to explicitly parameterize the Generic types (as templates in C++).
+\item Generic types should not require importing a package multiple times for multiple, different instances of the generic construct in question.
+\end{itemize}
+
+\subsection{Overview}
+This proposal for generic types adds a single keyword to the language: \code{generic}.  The keyword can be used in a type definition, in place of an interface or structure type.
+
+Consider a fictitious package (say \code{gen}) in which the code from \Listing{basic} is used.
+\begin{lstlisting}[float=tbp,caption={Basic example of generic types},label=lst:basic]
+// Package gen provides some example generic functionality.
+package gen
+
+type Number generic
+
+// Min returns the number closest to -$\color{comment}\infty$.
+func Min(a, b Number) Number {
+	if a < b {
+	  return a
+	}
+	return b
+}
+
+type Value generic
+
+// Tern is analogous to the C ternary value syntax:
+//   cond?t:f
+func Tern(cond bool, t, f Value) Value {
+  if cond {
+    return t
+  }
+  return f
+}
+
+// Check can be used to do simple error checking of
+// function return values.
+func Check(ret Value, err os.Error) Value {
+  if err != nil {
+    panic(err)
+  }
+  return ret
+}
+\end{lstlisting}
+
+\end{document}
