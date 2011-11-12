@@ -222,9 +222,20 @@ Calling a function with generic arguments within a generic function should be po
 Generic interfaces behave the way I think would be expected.  It will probably incur a runtime penalty higher than that of a normal interface, however, for things like type switches and type assertions, due to the extra requirements (assignability, convertability, indexing, mathematical operations) attached to the various generic types in addition to requiring that the concrete types all match.  It should, however, enable things like the coveted Equaler interface as in \Listing{equaler}, which will require some infinite recursion detection (or, more likely, dynamic programming).
 
 \begin{lstlisting}[float=htbp,caption={Equaler interface.},label=lst:equaler]
-// Equaler is a simple generic (recursive) interface.
+type Value generic
 type Equaler interface {
-  Equals(other Equaler) bool
+  Equals(other Value) bool
+}
+
+// Search returns the index of the first element for which list[idx].Equal(val)
+// returns true, or -1 if no matches are found.
+func Search(list []Equaler, val Value) int {
+  for i, v := range list {
+    if v.Equal(val) {
+      return i
+    }
+  }
+  return -1
 }
 
 // Integer implements Equaler.
