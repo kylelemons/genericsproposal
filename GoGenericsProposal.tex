@@ -1,4 +1,4 @@
-\documentclass[10pt]{article}
+\documentclass[10pt,a4paper]{article}
 \author{by: Kyle Lemons}
 \title{A Proposal for Generic Types in Go}
 
@@ -9,6 +9,7 @@
 \usepackage{fontenc}
 \usepackage{courier}
 \usepackage{hyperref}
+\usepackage{fullpage}
 
 % Set up cross references and links
 \hypersetup{
@@ -72,7 +73,7 @@
   tabsize=2,                  % Default tab width
   showtabs=false,             % Don't show tabs as arrows
   breaklines=true,            % Add line breaks for long lines
-  breakindent=12px,           % Indent broken lines
+  breakindent=1.1em,            % Indent broken lines
   breakatwhitespace=true,     % Try to break lines at whitespace
   % Misc
   extendedchars=true,         % Allow UTF-8 characters
@@ -80,7 +81,7 @@
   frame=b,                    % Show a bottom frame for listings
   xleftmargin=17pt,           % Add some extra space for the code
   framexleftmargin=17pt,      % Widen the frame to accomodate
-  framexrightmargin=6pt,      % Widen the right side too
+  framexrightmargin=0pt,      % Widen the right side too
   framexbottommargin=3pt,     % Leave some whitespace below the text
   % Use math escapes
   mathescape,
@@ -101,6 +102,7 @@
 % Commands
 \newcommand{\code}[1]{\texttt{#1}}
 \newcommand{\Listing}[1]{\autoref{lst:#1}}
+\newcommand{\Section}[1]{\autoref{sec:#1}}
 
 \begin{document}
 
@@ -123,27 +125,18 @@ In designing this proposal for generic types, there are a few fundamental princi
 \end{itemize}
 
 \subsection{Overview}
-This proposal for generic types adds a single keyword to the language: \code{generic}.  The keyword can be used in a type definition, in place of an interface or structure type.
+This proposal for generic types adds a single keyword to the language: \code{generic}.  The keyword can be used in a type definition, in place of an interface or structure type.  For a basic example of a package with generic types, consider a fictitious package \code{gen}, shown in \Listing{basic}.
 
-Consider a fictitious package (say \code{gen}) in which the code from \Listing{basic} is used.
 \begin{lstlisting}[float=tbp,caption={Basic example of generic types},label=lst:basic]
 // Package gen provides some example generic functionality.
 package gen
 
-type Number generic
-
-// Min returns the number closest to -$\color{comment}\infty$.
-func Min(a, b Number) Number {
-	if a < b {
-	  return a
-	}
-	return b
-}
-
+// Generic types for this package
 type Value generic
+type Result generic
+type ReduceFunc func(Result, Value) Result
 
-// Tern is analogous to the C ternary value syntax:
-//   cond?t:f
+// Tern is the ternary operator: Tern(cond,t,f) == (cond?t:f)
 func Tern(cond bool, t, f Value) Value {
   if cond {
     return t
@@ -151,14 +144,111 @@ func Tern(cond bool, t, f Value) Value {
   return f
 }
 
-// Check can be used to do simple error checking of
-// function return values.
-func Check(ret Value, err os.Error) Value {
+// Reduce returns the result of running the ReduceFunc on each successive value
+// in list along with the last result.
+func (red ReduceFunc) Reduce(r0 Result, list ...Value) Result {
+  for _, v := range list {
+    r0 = red(r0, v)
+  }
+  return r0
+}
+
+// Check strips out the os.Error return from a function call for use inline.
+func Check(val Value, err os.Error) Value {
   if err != nil {
     panic(err)
   }
-  return ret
+  return val
 }
 \end{lstlisting}
+
+To demonstrate the simplicity of the generic types in this proposal, consider the short (but contrived) program in \Listing{basic-usage} to sum up command-line arguments.
+
+\begin{lstlisting}[float=htbp,caption={Usage of basic generic types},label=lst:basic-usage]
+package main
+
+import (
+  "fmt"
+  "gen"
+  "strconv"
+)
+
+func main() {
+  add := gen.ReduceFunc(func(x0 int, x1 string) int {
+    return x0 + gen.Check(strconv.Atoi(x1))
+  })
+
+	nums := os.Args[1:]
+  fmt.Printf("Sum of your %s: %v\n",
+    "number" + gen.Tern(len(nums)==1, "", "s"),
+    add.Reduce(0, os.Args))
+}
+\end{lstlisting}
+
+This code could be entirely permissable with generic types, because the compiler specializes \code{gen.Tern} and \code{gen.Check} for \code{Value} as type \code{string} and specializes \code{gen.ReduceFunc} for \code{Value, Result} as \code{string, int} during code generation.  This could be done in a similar fashion to the way in which the C++ compiler would create a \code{string} version of the function for \code{gen::Tern<string>}, except with inferences for each generic type involved.
+
+Compare this example to a scenario in which \code{Value} was an \code{interface} of some kind:  no type assertions or run-time overhead is incurred, and the type safety of the code is guaranteed at compile time.  If \code{Value} was an interface, the compiler would have no way of ensuring that the two types given to \code{gen.Tern} were the same type, and would not be able to know that adding a \code{string} to the result of the function call was acceptable. With the \code{interface}, these checks would either have the potential to \code{panic} or require extra boilerplate to check at run-time.
+
+\newpage
+\section{Generic Type Usage}
+In each of the following sections, I will attempt to do the following:
+\begin{itemize}
+\item Give an example of the usage of generic types in that context
+\item Explain when generic types can and cannot be used in that context
+\item Give a possible method for compiler/linker implementation of that application
+\end{itemize}
+
+\subsection{Pure Generic Types}
+We have already seen an example of pure generic types: on \Listing{basic}:5-6.  Any named type whose underlying type has been specified with the \code{generic} keyword is a ``generic type.''
+
+When the compiler finds a pure generic type, it will track this type in a much different way from other types.  When the type is used as a part of another definition, it will not fully compile that entity and will instead store something similar to the parse tree of that construct, along with a set of restrictions about how the value was used (e.g. whether the value of the generic type was used as a slice index or map key, whether the value was casted, whether the value had any basic operators used and the type of the other operand, etc).  This parse tree could be processed to some degree without specializing the types, but would probably need to be stored in the object files with very little obfuscation.  Because of this restriction, it would be difficult to hide the implementation of a generic construction from the consumer of a library.
+
+When the compiler is performing type checks and encounters a generic type (e.g. on \Listing{basic-usage}:11 when type-checking \code{gen.Check}), it will validate the inferred type against these restrictions before specializing a new instance of the function, interface, etc.  It will collect the apparent types of all values necessary to specialize the type, and then ensure that all instances of a particular generic type have identical concrete types.  Like the rest of Go, no implicit type conversion will happen.
+
+\subsection{Hybrid Generic Types}
+As with pure generic types, we have already seen an example of hybrid generic types: on \Listing{basic} line 7.  In my (admittedly arbitrary) terminology, a hybrid generic type is a normal Go type (an interface, a function, a struct) which cannot be completely described without filling in the concrete type of one or more generic type.
+
+At a very basic level, the code for an entire hybrid type (including all of its methods and conversions) can be specialized at the time in which a value of that type is declared.  Values and variables specialized from a generic type should probably not maintain an annotation about the generic type from which they were specialized, as passing a value specialized with one generic type as a value of a different generic type with the same requirements seems sensible.  This may weaken the strict typing of Go, though, especially when reading through code and eyeballing variable types, and so may not be a good idea if generic types and user-defined types are intermixed.
+
+\subsection{Generic Functions}
+\label{sec:genfunc}
+Generic functions would behave the way I think we would all expect them to.  At the call-site, the concrete types of each generic argument with the same type must match, and then the return types must match.  I suspect that there will have to be a requirement that any generic type used in a return value must also be used in an argument, but it would be really cool if this wasn't the case.
+
+One really nice aspect of Go is that every type has a well-defined zero value (though it may not be properly initialized), so it is possible to instantiate values of a generic type within the value of a function.  I suspect that there will also have to be a requirement that all generic types in the function will have to also be used in the argument list.
+
+Calling a function with generic arguments within a generic function should be possible.  In general, it will cascade any requirements of the inner function's generic type outward.  In some cases it may be possible to identify when one generic type cannot be passed as a value of another---for instance, if a generic value is indexed in the inner function and operated on with an arithmetic operator in the outer function or another inner function.
+
+\subsection{Generic Interfaces}
+Generic interfaces behave the way I think would be expected.  It will probably incur a runtime penalty higher than that of a normal interface, however, for things like type switches and type assertions, due to the extra requirements (assignability, convertability, indexing, mathematical operations) attached to the various generic types in addition to requiring that the concrete types all match.  It should, however, enable things like the coveted Equaler interface as in \Listing{equaler}, which will require some infinite recursion detection (or, more likely, dynamic programming).
+
+\begin{lstlisting}[float=htbp,caption={Equaler interface.},label=lst:equaler]
+// Equaler is a simple generic (recursive) interface.
+type Equaler interface {
+  Equals(other Equaler) bool
+}
+
+// Integer implements Equaler.
+type Integer int
+func (i Integer) Equals(j Integer) bool {
+	return i == j
+}
+
+// Compile-time check.
+var _ Equaler = Integer(0)
+\end{lstlisting}
+
+\section{Advantages}
+\subsection{Simplicity and Orthogonality}
+I think this is one of the simpler generic type proposals possible.  It does not change the semantics of any code, and only adds a single keyword.  I believe that it is orthogonal enough to the type system that it wouldn't require much, if any, discussion in the specifications beyond a section describing generic types.  In other words, I don't think detailed discussions about the interaction with functions, interfaces, etc. would need to be discussed in \textit{their} respective sections.
+
+\subsection{Implementations}
+This proposal has the advantage that the implementation suggested above isn't the only possible implementation.  In rereading it, it could also be implemented by replacing all generics with interfaces and surrounding them with runtime type checks, or at runtime in an interpreter.  The semantics are simple enough that the implementation itself could be done in any number of ways.
+
+\section{Drawbacks}
+\subsection{Compilation}
+This proposal definitely incurs a compile-time penalty, and will increase object sizes.  It also has the potential to create many specializations of generic functions without the programmer noticing, which will increase binary sizes.  It will probably be quite difficult to combine identical specializations of the same generic entity when they are included in a binary through separate objects.  As mentioned earlier, it also reduces the opacity of object files in general, as generic entities would be relatively easy to scrutinize and replicate.
+
+\subsection{Execution}
+The execution penalty of the specializations would be no higher than the equivalent non-generic entity, but compared to a reflection- or run-time-specialized generic approach could potentially perform worse (due to caching) if the number of specializations of an entity is high.
 
 \end{document}
